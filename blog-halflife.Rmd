@@ -1,0 +1,84 @@
+---
+title: "La demi-vie"
+author: "Coulmont"
+date: "06/12/2017"
+output: html_document
+---
+
+```{r setup, include=TRUE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(foreign)   # pour charger le fichier .dbf
+library(tidyverse) # 
+
+# télécharger le fichier des prénoms 2017 : il est sur le site de l'insee
+
+setwd("~/mon_repertoire_de_travail/")  # répertoire de travail
+df <- read.dbf("prenoms2017/nat2015.dbf",as.is=T) # le fichier des prénoms est dans le répertoire de travail
+# on règle les problèmes d'encodage :
+df$preusuel <- iconv(df$preusuel, from="latin1", to="UTF-8")
+# il faut ensuite enlever tous les caractères accentués que l'insee a gardé 
+df$preusuel<-chartr('ÁÀÂÄÃÅÇÉÈÊËÍÏÎÌÑÓÒÔÖÕÚÙÛÜÝ', 'AAAAAACEEEEEIIIINOOOOOUUUUY',df$preusuel)
+df$annais <- as.numeric(as.character(df$annais)) # les années de naissance passent en numérique
+df$preusuel <- as.character(df$preusuel)         # les prénoms passent de factor à character
+
+# Comme LÉA et LEA sont identiques, on fait la somme
+df <- df %>% group_by(sexe,annais,preusuel) %>% 
+  summarize(sum.p = sum(nombre))
+
+# déterminer le rang des prénoms, 
+# en ne considérant pas les _PRENOMS_RARES
+df <- df %>% group_by(annais,sexe) %>% 
+  mutate(rang = case_when(preusuel=="_PRENOMS_RARES" ~ as.integer(25000),
+                          TRUE ~ rank(-sum.p,ties.method = "random"))) %>% 
+  ungroup()
+
+tmp <- df %>% filter(!is.na(annais)) %>% # on enleve les lignes avec les années manquantes
+  mutate(top = rang<21) %>%              # variable "top" indique présence dans le top 20
+  group_by(preusuel,sexe) %>%            # on groupe par prénom
+  mutate(an_sortie_m=min(annais[!top]),      # année de "sortie"" minimale du "top"
+         an_sortie_p=max(annais[top])+1) %>% # année de présence maximale dans le "top""
+  filter(top) %>%                        # on ne garde que le top
+  mutate(an_sortie = ifelse(annais<an_sortie_m,
+                            an_sortie_m,      # dans certains cas, ex : "LOUIS" le prénom
+                            an_sortie_p))     # revient à la mode en fin de période
+  # donc on compare l'année de naissance avec l'année de sortie
+
+tmp <- tmp %>% 
+  mutate(nombre=1) %>%              # variable utile pour l'incrémentation
+  group_by(annais,sexe) %>%       
+  arrange(an_sortie) %>%            # on range les données par année de sortie
+  mutate(N=cumsum(nombre)) %>%      # somme cumulée des prénoms sortis du top
+  mutate(annee_40=min(an_sortie[N>8]), # année où 40% des prénoms sont sortis
+         annee_60=min(an_sortie[N>10])) # année où 60% des prénoms sont sortis
+
+# on va considérer que l'année où 50% des prénoms sont sortis
+# est repérée par la moyenne 
+tmp <- tmp %>% 
+  group_by(annais,sexe) %>%         # on groupe par année et sexe
+  summarize(duree_40=mean(annee_40-annais),     
+            duree_60=mean(annee_60-annais)) %>%
+  mutate(duree=(duree_40+duree_60)/2) # 
+
+
+tmp %>% filter(annais<2001) %>%    # car le fichier s'arrête en 2015
+  ggplot(aes(annais,duree,group=sexe,color=sexe)) + 
+  geom_point(size=.5,alpha=.5) +  
+  geom_smooth(span=.3) + 
+  coord_cartesian(ylim=c(0,40)) +
+  scale_color_manual(breaks=c("1","2"),
+                     labels=c("garçons","filles"),
+                     values=c("dodgerblue","firebrick1")) +
+  labs(title="La demi-vie du « Top 20 »\nDurée nécessaire pour remplacer la moitié du « top 20 » des prénoms",
+       subtitle="Il a fallu 40 ans pour remplacer la moitié des 20 prénoms masculins les plus fréquents en 1900",
+       caption="Source : Insee, Fichier des prénoms, édition 2017 – Réalisation Baptiste Coulmont",
+       x="Année",
+       y="Demi-vie (en années)",
+       color="") +
+  theme(legend.position=c(.9,.91),
+        legend.background = element_rect(fill="#ffffff00")) 
+
+
+
+
+```
